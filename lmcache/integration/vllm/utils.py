@@ -36,29 +36,40 @@ def is_false(value: str) -> bool:
     return value.lower() in ("false", "0", "no", "n", "off")
 
 
-def vllm_layout_hints() -> "LayoutHints":
-    """Build layout_hints dict by querying vLLM at runtime."""
+def vllm_layout_hints(vllm_config: "VllmConfig | None" = None) -> "LayoutHints":
+    """Build layout_hints dict by querying vLLM at runtime.
+
+    Pass ``vllm_config`` where the caller holds one: the block size is read
+    from it directly, which is the only way to get it in a worker, where no
+    config is bound to the current context.
+    """
     hints: dict[str, Any] = {}
     kv_layout = try_get_vllm_kv_cache_layout()
     if kv_layout is not None:
         hints["kv_layout"] = kv_layout
-    tokens_per_block = try_get_vllm_block_size()
+    tokens_per_block = try_get_vllm_block_size(vllm_config)
     if tokens_per_block is not None:
         hints["tokens_per_block"] = tokens_per_block
     return hints  # type: ignore[return-value]
 
 
-def try_get_vllm_block_size() -> Optional[int]:
-    """Try to query the paged block size from vLLM at runtime.
+def try_get_vllm_block_size(vllm_config: "VllmConfig | None" = None) -> Optional[int]:
+    """Try to get the paged block size, preferring a caller-supplied config.
 
     Detection otherwise infers which axis holds the block size from tensor
     rank alone, so a layout it does not already know is mislabelled rather
     than rejected. Reporting the engine's own value lets the detector check
     its guess.
 
-    Returns ``None`` when vLLM is unavailable or no config is bound, in which
-    case detection keeps its previous unchecked behaviour.
+    Returns ``None`` when the block size cannot be determined, in which case
+    detection keeps its previous unchecked behaviour.
     """
+    if vllm_config is not None:
+        block_size = getattr(
+            getattr(vllm_config, "cache_config", None), "block_size", None
+        )
+        if block_size:
+            return int(block_size)
 
     # Third Party
     try:
