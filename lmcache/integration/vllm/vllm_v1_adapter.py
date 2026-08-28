@@ -818,6 +818,21 @@ class LMCacheConnectorV1Impl:
             slot_mapping = request.slot_mapping.to(self.device)
             assert len(tokens) == len(slot_mapping)
 
+            _probe = slot_mapping[:8].tolist()
+            _first = kvcaches[0] if kvcaches else None
+            logger.info(
+                "[lmcfp] req=%s slots[:8]=%s blocks=%s block_size=%d "
+                "kv0.shape=%s kv0.stride=%s kv0.ptr=%s nlayers=%s",
+                request.req_id,
+                _probe,
+                [s // self._block_size for s in _probe],
+                self._block_size,
+                None if _first is None else tuple(_first.shape),
+                None if _first is None else tuple(_first.stride()),
+                None if _first is None else hex(_first.data_ptr()),
+                None if kvcaches is None else len(kvcaches),
+            )
+
             token_mask = torch.ones(len(tokens), dtype=torch.bool)
             masked_token_count = (
                 request.load_spec.vllm_cached_tokens
