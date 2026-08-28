@@ -28,6 +28,29 @@ def resolve_vllm_kv_layout(
     return layout_hints.get("kv_layout", "NHD")
 
 
+def _check_block_size_axis(
+    tensor: torch.Tensor, block_size_axis: int, layout_hints: LayoutHints
+) -> None:
+    """Reject a rank-4 layout whose block-size axis contradicts the engine.
+
+    ``tokens_per_block`` is optional, so this is a no-op for engines that do
+    not report it.
+    """
+    tokens_per_block = layout_hints.get("tokens_per_block")
+    if not tokens_per_block:
+        return
+    found = int(tensor.shape[block_size_axis])
+    if found == tokens_per_block:
+        return
+    raise ValueError(
+        f"vLLM registered a rank-4 KV cache of shape {tuple(tensor.shape)}, which "
+        f"the blocks-first fused-K/V layout reads as block size {found} on axis "
+        f"{block_size_axis}, but the engine uses a block size of {tokens_per_block}. "
+        "Some other rank-4 layout is in use and LMCache has no format for it; "
+        "loading it would silently write KV outside the blocks vLLM reads."
+    )
+
+
 class VLLM_Detector(EngineDetector):
     engine_type = EngineType.VLLM
 
@@ -43,18 +66,28 @@ class VLLM_Detector(EngineDetector):
         )
         is_hnd = kv_layout == "HND"
 
-        # Blocks-first fused K/V is the only rank-4 vLLM layout, so its raw rank
-        # identifies it unambiguously (a 5-D split would collide with
-        # flash-infer when num_heads == 2). The two middle axes are NH/BS
-        # (HND) or BS/NH (NHD) -- indistinguishable from the shape alone, so the
-        # resolved kv_layout decides. The tensor is kept raw: the trailing axis
-        # is the per-head content size (2 * head_size, K/V packed).
+        # Blocks-first fused K/V is the only rank-4 vLLM layout we know, so its
+        # raw rank names it (a 5-D split would collide with flash-infer when
+        # num_heads == 2). The two middle axes are NH/BS (HND) or BS/NH (NHD)
+        # -- indistinguishable from the shape alone, so the resolved kv_layout
+        # decides. The tensor is kept raw: the trailing axis is the per-head
+        # content size (2 * head_size, K/V packed).
         if (
             isinstance(kv_caches, list)
             and kv_caches
             and isinstance(kv_caches[0], torch.Tensor)
             and kv_caches[0].dim() == 4
         ):
+            # Rank alone cannot tell this layout from another rank-4 one, and
+            # picking wrong is silent: every slot address is computed from the
+            # wrong axis, so a retrieve reports success while writing outside
+            # the blocks the engine will read. Check the guess when the engine
+            # told us its block size.
+            _check_block_size_axis(
+                kv_caches[0],
+                block_size_axis=2 if is_hnd else 1,
+                layout_hints=layout_hints,
+            )
             if is_hnd:
                 return lmcache_native.EngineKVFormat.NL_X_NB_NH_BS_CS, kv_caches
             return lmcache_native.EngineKVFormat.NL_X_NB_BS_NH_CS, kv_caches

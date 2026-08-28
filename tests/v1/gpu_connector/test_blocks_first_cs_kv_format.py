@@ -11,6 +11,7 @@ gather/scatter round-trip for that layout.
 """
 
 # Third Party
+import pytest
 import torch
 
 # First Party
@@ -166,3 +167,35 @@ def test_multi_layer_block_kv_transfer_roundtrip():
 
     for original, recovered in zip(norm, out, strict=True):
         assert torch.equal(original, recovered)
+
+
+def test_rank4_with_a_contradicting_block_size_is_rejected():
+    """A different rank-4 layout must not be read as blocks-first fused K/V.
+
+    vLLM can register [NB, 2, BS, NH * HS] -- the K/V-major sibling of this
+    layout with heads and head size fused. It is also rank 4, so rank alone
+    picks the wrong format and every slot address is then computed from the
+    wrong axis: a retrieve reports success while writing outside the blocks
+    vLLM reads, which surfaces as a cache hit returning zeroed KV. Detection
+    has to refuse it once the engine reports its block size.
+    """
+    caches = [torch.randn(NB, 2, BS, NH * HS) for _ in range(NL)]
+    hints = {"kv_layout": "NHD", "tokens_per_block": BS}
+
+    with pytest.raises(ValueError, match="block size"):
+        U.normalize_kv_and_discover_format(caches, EngineType.VLLM, hints)
+
+
+def test_block_size_hint_accepts_the_layout_it_describes():
+    caches = _raw_blocks_first_caches()
+    hints = {"kv_layout": "HND", "tokens_per_block": BS}
+
+    fmt, _ = U.normalize_kv_and_discover_format(caches, EngineType.VLLM, hints)
+    assert fmt == lmcache_native.EngineKVFormat.NL_X_NB_NH_BS_CS
+
+
+def test_detection_is_unchanged_without_a_block_size_hint():
+    fmt, _ = U.normalize_kv_and_discover_format(
+        _raw_blocks_first_caches(), EngineType.VLLM, HINTS
+    )
+    assert fmt == lmcache_native.EngineKVFormat.NL_X_NB_NH_BS_CS
