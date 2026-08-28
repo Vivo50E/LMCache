@@ -10,6 +10,7 @@ import torch
 
 # First Party
 from lmcache import torch_device_type
+from lmcache.logging import init_logger
 from lmcache.utils import EngineType
 from lmcache.v1.gpu_connector.kv_format.detectors.base import (
     EngineDetector,
@@ -17,6 +18,8 @@ from lmcache.v1.gpu_connector.kv_format.detectors.base import (
 )
 from lmcache.v1.gpu_connector.kv_format.types import DiscoverableKVCache, LayoutHints
 import lmcache.lmcache_native as lmcache_native
+
+logger = init_logger(__name__)
 
 
 def resolve_vllm_kv_layout(
@@ -59,6 +62,7 @@ class VLLM_Detector(EngineDetector):
         kv_caches: DiscoverableKVCache,
         layout_hints: LayoutHints,
     ) -> "tuple[Optional[lmcache_native.EngineKVFormat], DiscoverableKVCache]":
+        logger.info("vLLM KV cache discovery received layout hints: %s", layout_hints)
         # vLLM's CPU attention backend stores KV in HND but misreports it, so
         # force HND there; otherwise honor the hint, defaulting to NHD.
         kv_layout = resolve_vllm_kv_layout(
