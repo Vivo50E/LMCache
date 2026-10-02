@@ -54,6 +54,7 @@ from lmcache.v1.multiprocess.modules.experimental.qstore import QStoreModule
 from lmcache.v1.multiprocess.modules.lmcache_driven_transfer import (
     LMCacheDrivenTransferModule,
 )
+from lmcache.v1.multiprocess.modules.hidden_state import HiddenStateModule
 from lmcache.v1.multiprocess.modules.lookup import LookupModule
 from lmcache.v1.multiprocess.modules.management import ManagementModule
 from lmcache.v1.multiprocess.modules.p2p_controller import P2PController
@@ -165,6 +166,9 @@ def _build_modules(
         supported_transfer_mode="engine_driven".
     """
     lookup_module = LookupModule(ctx)
+    # Always built: it holds no device resources and starts no threads, so an
+    # engine that never registers a hidden-state layout pays nothing for it.
+    hidden_state_module = HiddenStateModule(ctx)
     p2p_controller = P2PController(
         ctx,
         mp_config.p2p_config,
@@ -198,6 +202,7 @@ def _build_modules(
         for m in transfer_modules
         if isinstance(m, (LMCacheDrivenTransferModule, EngineDrivenTransferModule))
     ]
+    liveness_targets.append(hidden_state_module)
 
     blend_module: EngineModule | None = None
     if mp_config.engine_type == "blend":
@@ -286,6 +291,7 @@ def _build_modules(
         lookup_module,
         p2p_controller,
         management,
+        hidden_state_module,
         *transfer_modules,
         *experimental_modules,
         *blend_modules,
